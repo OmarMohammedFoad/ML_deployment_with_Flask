@@ -1,47 +1,51 @@
-from flask import Flask,request
-import tensorflow as tf
-import base64
 import cv2
 import numpy as np
+import tensorflow as tf
+from flask import Flask, jsonify, request
 
+IMG_SIZE = (256, 256)
+THRESHOLD = 0.5
+ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png"}
 
-
-new_model = tf.keras.models.load_model("c:/Users/pc/graduation_project/API/ImageClassification/testFlask/imageclassifier.h5")
-
-
+model = tf.keras.models.load_model("./imageclassifier.h5", compile=False)
 app = Flask(__name__)
 
 
-
-@app.route('/api',methods = ['Put'] )
-def index():
-       inputchar = request.get_data()
-       imgdata = base64.b64decode(inputchar)
-       filename = 'somthing.jpg'  
-       with open(filename, 'wb') as f:
-        f.write(imgdata)
-
-       img = cv2.imread('c:/Users/pc/graduation_project/API/ImageClassification/testflask/somthing.jpg')
-       resize = tf.image.resize(img, (256,256))
-       yhat = new_model.predict(np.expand_dims(resize/255, 0))
-
-       result = ""
-       if yhat > 0.5: 
-              result= 'Predicted class is Sad'
-       else:
-              result= 'Predicted class is happy'
-
-    
+def allowed_file(filename: str) -> bool:
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-       return result
+def preprocess(file_bytes: bytes) -> np.ndarray:
+    buffer = np.frombuffer(file_bytes, np.uint8)
+    img_bgr = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
+    if img_bgr is None:
+        raise ValueError("Invalid image")
+    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+    resized = tf.image.resize(img_rgb, IMG_SIZE)
+    return np.expand_dims(resized / 255.0, 0)
 
+
+@app.route("/api/predict", methods=["POST"])
+def predict():
+    file = request.files.get("image")
+    if file is None or file.filename == "":
+        return jsonify({"error": "No image provided"}), 400
+    if not allowed_file(file.filename):
+        return jsonify({"error": "Unsupported file type"}), 400
+
+    try:
+        batch = preprocess(file.read())
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    sad_probability = float(model.predict(batch, verbose=0)[0][0])
+    is_sad = sad_probability > THRESHOLD
+
+    return jsonify({
+        "label": "sad" if is_sad else "happy",
+        "confidence": round(sad_probability if is_sad else 1 - sad_probability, 4),
+    })
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
-
-
-
-
-
+    app.run()
